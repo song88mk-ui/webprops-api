@@ -17,7 +17,8 @@ func Mount(srv *server.Server, r chi.Router) {
 	r.Handle("/metrics", promhttp.Handler())
 
 	// cache
-	r.With(server.MustApiKey).Route("/cache", func(r chi.Router) {
+	r.With(server.MustApiKey).With(server.MaybeLayout).Route("/cache", func(r chi.Router) {
 		r.Post("/flush", server.WrapHandler(s.invalidateCache))
+		r.Delete("/flush/{clientId}", server.WrapHandler(s.invalidateClientCache))
 	})
 }
