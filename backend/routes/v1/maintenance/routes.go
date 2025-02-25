@@ -13,6 +13,9 @@ type Server struct {
 func Mount(srv *server.Server, r chi.Router) {
 	s := &Server{Server: srv}
 
-	r.With(server.MustClient).
-		Get("/maintenance", server.WrapHandler(s.getMaintenance))
+	r.With(server.MustApiKey).
+		With(server.MaybeLayout).Route("/maintenance", func(r chi.Router) {
+		r.Get("/", server.WrapHandler(s.getMaintenance))
+		r.Post("/", server.WrapHandler(s.setMaintenance))
+	})
 }

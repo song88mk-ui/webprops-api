@@ -49,7 +49,7 @@ func (s *Server) getProperties(w http.ResponseWriter, r *http.Request) error {
 		container = cEnv
 	}
 
-	client, err := azblob.NewClient(accountUrl, creds, nil)
+	client, err := azblob.NewClient(server.AZURE_STORAGE_ACCOUNT, creds, nil)
 	if err != nil {
 		log.Errorf("unable to create azure blob client: %v", err)
 		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to acquire blob"}
@@ -90,7 +90,3 @@ func (s *Server) getProperties(w http.ResponseWriter, r *http.Request) error {
 	render.JSON(w, r, data)
 	return nil
 }
-
-const (
-	accountUrl = "https://song88webconfig.blob.core.windows.net"
-)
