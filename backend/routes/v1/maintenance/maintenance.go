@@ -57,11 +57,7 @@ func (s *Server) getMaintenance(w http.ResponseWriter, r *http.Request) error {
 		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to acquire azure id"}
 	}
 
-	container := "staging"
-	cEnv := os.Getenv("CONTAINER")
-	if cEnv != "" {
-		container = cEnv
-	}
+	container := azContainer()
 
 	client, err := azblob.NewClient(server.AZURE_STORAGE_ACCOUNT, creds, nil)
 	if err != nil {
@@ -161,7 +157,7 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 	var payload Payload
 	err := render.Decode(r, &payload)
 	if err != nil {
-		return err
+		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to decode payload"}
 	}
 
 	if payload.ClientIds == "all" {
@@ -170,8 +166,7 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 		for i, _ := range clientIds {
 			err := setJsonMaintenance(ctx, xLayout, clientIds[i], payload.IsMaintenance)
 			if err != nil {
-				render.JSON(w, r, err)
-				return nil
+				return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to set maintenance file: %v", err)}
 			}
 		}
 	} else {
@@ -181,8 +176,7 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 		for i, _ := range clientIds {
 			err := setJsonMaintenance(ctx, xLayout, clientIds[i], payload.IsMaintenance)
 			if err != nil {
-				render.JSON(w, r, err)
-				return nil
+				return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to set maintenance file: %v", err)}
 			}
 		}
 
@@ -194,12 +188,7 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 }
 
 func setJsonMaintenance(ctx context.Context, layout string, id string, isMaintenance bool) error {
-	container := "staging"
-	cEnv := os.Getenv("CONTAINER")
-	if cEnv != "" {
-		container = cEnv
-	}
-
+	container := azContainer()
 	blobPath := fmt.Sprintf("%s/%s.json", layout, id)
 
 	creds, err := azidentity.NewDefaultAzureCredential(nil)
@@ -284,11 +273,7 @@ func updateLocalFile(file *os.File, isMaintenance bool) error {
 func getClientIds(ctx context.Context, layout string) []string {
 	var result []string
 
-	container := "staging"
-	cEnv := os.Getenv("CONTAINER")
-	if cEnv != "" {
-		container = cEnv
-	}
+	container := azContainer()
 
 	creds, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
@@ -321,4 +306,13 @@ func getClientIds(ctx context.Context, layout string) []string {
 	}
 
 	return result
+}
+
+func azContainer() string {
+	container := "staging"
+	cEnv := os.Getenv("CONTAINER")
+	if cEnv != "" {
+		container = cEnv
+	}
+	return container
 }
