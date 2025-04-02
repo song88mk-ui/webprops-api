@@ -13,6 +13,7 @@ import (
 	"s88/wp/backend/log"
 	"s88/wp/backend/server"
 
+	"code.forgejo.org/go-chi/cache"
 	"emperror.dev/errors"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
@@ -154,6 +155,8 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
+	c, _ := cache.NewCacher(cache.Options{Adapter: "memory"})
+
 	var payload Payload
 	err := render.Decode(r, &payload)
 	if err != nil {
@@ -168,6 +171,8 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 			if err != nil {
 				return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to set maintenance file: %v", err)}
 			}
+			// remove from cache
+			_ = c.Delete(fmt.Sprintf("%s-%s", xLayout, clientIds[i]))
 		}
 	} else {
 
@@ -178,11 +183,12 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 			if err != nil {
 				return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to set maintenance file: %v", err)}
 			}
+			// remove from cache
+			_ = c.Delete(fmt.Sprintf("%s-%s", xLayout, clientIds[i]))
 		}
 
 	}
 
-	// flush
 	render.JSON(w, r, "ok")
 	return nil
 }
