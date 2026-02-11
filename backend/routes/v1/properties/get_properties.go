@@ -1,9 +1,9 @@
 package properties
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -11,8 +11,8 @@ import (
 	"s88/wp/backend/server"
 
 	"code.forgejo.org/go-chi/cache"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-chi/render"
 )
 
@@ -37,49 +37,38 @@ func (s *Server) getProperties(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	creds, err := azidentity.NewDefaultAzureCredential(nil)
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		log.Errorf("unable to initialize azure id: %v", err)
+		log.Errorf("unable to load SDK config: %v", err)
 		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to acquire azure id"}
 	}
 
-	container := "staging"
-	cEnv := os.Getenv("CONTAINER")
-	if cEnv != "" {
-		container = cEnv
-	}
+	s3Client := s3.NewFromConfig(cfg)
 
-	client, err := azblob.NewClient(server.AZURE_STORAGE_ACCOUNT, creds, nil)
-	if err != nil {
-		log.Errorf("unable to create azure blob client: %v", err)
-		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to acquire blob"}
-	}
+	bucket := os.Getenv("BUCKET_NAME")
 
-	resp, err := client.DownloadStream(ctx, container, filePath, nil)
+	log.Infof("retrieving: %s:%s", bucket, filePath)
+
+	resp, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &filePath,
+	})
+
 	if err != nil {
 		render.Status(r, http.StatusNotFound)
 		render.JSON(w, r, server.APIError{Code: http.StatusNotFound, Message: fmt.Sprintf("no properties for client: %s", clientId)})
 		return nil
 	}
 
-	buf := bytes.Buffer{}
-	retryReader := resp.NewRetryReader(ctx, &azblob.RetryReaderOptions{})
-	_, err = buf.ReadFrom(retryReader)
-
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Errorf("unable to read from stream: %v", err)
 		return server.APIError{Code: http.StatusInternalServerError, Message: "error reading file"}
 	}
 
-	err = retryReader.Close()
-	if err != nil {
-		log.Errorf("unable to close stream: %v", err)
-		return server.APIError{Code: http.StatusInternalServerError, Message: "error closing file"}
-	}
-
 	var data map[string]interface{}
 
-	err = json.Unmarshal(buf.Bytes(), &data)
+	err = json.Unmarshal(body, &data)
 
 	if err != nil {
 		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to parse json"}

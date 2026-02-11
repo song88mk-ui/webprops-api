@@ -8,6 +8,7 @@ import (
 	"s88/wp/backend/server"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func mountRoutes(srv *server.Server) {
@@ -17,4 +18,5 @@ func mountRoutes(srv *server.Server) {
 		admin.Mount(srv, router)
 	})
 	srv.Router.Get("/healthz", routes.HealthCheckHandler)
+	srv.Router.Handle("/metrics", promhttp.Handler())
 }

@@ -6,10 +6,6 @@ import (
 	"strings"
 )
 
-const (
-	AZURE_STORAGE_ACCOUNT = "https://song88webconfig.blob.core.windows.net"
-)
-
 func MaybeLayout(next http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		xLayout := r.Header.Get("X-Layout")
