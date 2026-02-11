@@ -19,3 +19,4 @@ ENV PORT=8000
 EXPOSE $PORT
 
 ENTRYPOINT ["/app/bin/webprops"]
+CMD ["web"]
