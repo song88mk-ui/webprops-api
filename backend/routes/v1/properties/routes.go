@@ -15,6 +15,10 @@ func Mount(srv *server.Server, r chi.Router) {
 
 	r.Get("/config/{clientId}", server.WrapHandler(s.getConfig))
 
+	r.With(server.MustApiKey).
+		With(server.MaybeLayout).
+		Post("/config/{clientId}", server.WrapHandler(s.updateConfig))
+
 	r.With(server.MustClient).
 		With(server.MaybeLayout).
 		Get("/properties", server.WrapHandler(s.getProperties))

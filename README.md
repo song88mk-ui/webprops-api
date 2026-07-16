@@ -13,6 +13,7 @@ API Endpoints
 -------------
 
 * `GET /api/v1/config/{clientId}` - Get configuration for a client
+* `POST /api/v1/config/{clientId}` - Update configuration for a client (requires `X-Api-Key`; optional `X-Layout` header targets the layout-specific file; body is the full config JSON)
 
 Response:
 

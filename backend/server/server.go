@@ -16,8 +16,6 @@ var (
 	Tag = "latest"
 )
 
-const AZURE_STORAGE_ACCOUNT = "https://song88webconfig.blob.core.windows.net"
-
 type Server struct {
 	Router *chi.Mux
 }

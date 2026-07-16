@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -15,8 +15,8 @@ import (
 
 	"code.forgejo.org/go-chi/cache"
 	"emperror.dev/errors"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-chi/render"
 )
 
@@ -29,6 +29,16 @@ type Maintenance struct {
 type Payload struct {
 	ClientIds     string `json:"clientIds"`
 	IsMaintenance bool   `json:"isMaintenance"`
+}
+
+func newS3Client(ctx context.Context) (*s3.Client, string, error) {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Errorf("unable to load SDK config: %v", err)
+		return nil, "", errors.Wrap(err, "failed to load AWS config")
+	}
+
+	return s3.NewFromConfig(cfg), os.Getenv("BUCKET_NAME"), nil
 }
 
 func (s *Server) getMaintenance(w http.ResponseWriter, r *http.Request) error {
@@ -52,39 +62,39 @@ func (s *Server) getMaintenance(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	creds, err := azidentity.NewDefaultAzureCredential(nil)
+	s3Client, bucket, err := newS3Client(ctx)
 	if err != nil {
-		log.Errorf("unable to initialize azure id: %v", err)
-		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to acquire azure id"}
+		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to load AWS config"}
 	}
 
-	container := azContainer()
+	prefix := xLayout + "/"
 
-	client, err := azblob.NewClient(server.AZURE_STORAGE_ACCOUNT, creds, nil)
-	if err != nil {
-		log.Errorf("unable to create azure blob client: %v", err)
-		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to acquire blob"}
-	}
+	paginator := s3.NewListObjectsV2Paginator(s3Client, &s3.ListObjectsV2Input{
+		Bucket: &bucket,
+		Prefix: &prefix,
+	})
 
-	pager := client.NewListBlobsFlatPager(container, nil)
+	mm := []Maintenance{}
 
-	var mm []Maintenance
-
-	for pager.More() {
-		pResp, err := pager.NextPage(ctx)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			return server.APIError{Code: http.StatusInternalServerError, Message: err.Error()}
 		}
 
-		for _, b := range pResp.Segment.BlobItems {
-
-			if strings.HasPrefix(*b.Name, xLayout) {
-				m, ok := getJsonMaintenance(ctx, client, container, *b.Name)
-				if ok {
-					mm = append(mm, m)
-				}
+		for _, obj := range page.Contents {
+			key := *obj.Key
+			if !strings.HasSuffix(key, ".json") {
+				continue
 			}
 
+			m, ok := getJsonMaintenance(ctx, s3Client, bucket, key)
+			if ok {
+				if m.ClientId == "" {
+					m.ClientId = clientIdFromKey(key, prefix)
+				}
+				mm = append(mm, m)
+			}
 		}
 	}
 
@@ -92,33 +102,33 @@ func (s *Server) getMaintenance(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func getJsonMaintenance(ctx context.Context, abc *azblob.Client, container string, path string) (Maintenance, bool) {
+func getJsonMaintenance(ctx context.Context, s3Client *s3.Client, bucket string, key string) (Maintenance, bool) {
 	var m Maintenance
-	resp, err := abc.DownloadStream(ctx, container, path, nil)
+
+	resp, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	})
 	if err != nil {
+		log.Errorf("unable to get object %s: %v", key, err)
 		return m, false
 	}
+	defer resp.Body.Close()
 
-	buf := bytes.Buffer{}
-	retryReader := resp.NewRetryReader(ctx, &azblob.RetryReaderOptions{})
-	_, err = buf.ReadFrom(retryReader)
-
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return m, false
-	}
-
-	err = retryReader.Close()
-	if err != nil {
+		log.Errorf("unable to read object %s: %v", key, err)
 		return m, false
 	}
 
 	var data map[string]interface{}
 
-	err = json.Unmarshal(buf.Bytes(), &data)
-
+	err = json.Unmarshal(body, &data)
 	if err != nil {
+		log.Errorf("unable to parse object %s: %v", key, err)
 		return m, false
 	}
+
 	if v, ok := data["clientId"].(string); ok {
 		m.ClientId = v
 	}
@@ -155,170 +165,126 @@ func (s *Server) setMaintenance(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	c, _ := cache.NewCacher(cache.Options{Adapter: "memory"})
-
 	var payload Payload
 	err := render.Decode(r, &payload)
 	if err != nil {
-		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to decode payload"}
+		return server.APIError{Code: http.StatusBadRequest, Message: "failed to decode payload"}
 	}
 
-	if payload.ClientIds == "all" {
-		clientIds := getClientIds(ctx, xLayout)
+	s3Client, bucket, err := newS3Client(ctx)
+	if err != nil {
+		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to load AWS config"}
+	}
 
-		for i, _ := range clientIds {
-			err := setJsonMaintenance(ctx, xLayout, clientIds[i], payload.IsMaintenance)
-			if err != nil {
-				return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to set maintenance file: %v", err)}
-			}
-			// remove from cache
-			_ = c.Delete(fmt.Sprintf("%s-%s", xLayout, clientIds[i]))
+	var clientIds []string
+
+	if payload.ClientIds == "all" {
+		clientIds, err = getClientIds(ctx, s3Client, bucket, xLayout)
+		if err != nil {
+			return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to list clients: %v", err)}
 		}
 	} else {
-
-		clientIds := strings.Split(payload.ClientIds, ",")
-
-		for i, _ := range clientIds {
-			err := setJsonMaintenance(ctx, xLayout, clientIds[i], payload.IsMaintenance)
-			if err != nil {
-				return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to set maintenance file: %v", err)}
+		for _, id := range strings.Split(payload.ClientIds, ",") {
+			id = strings.ToUpper(strings.TrimSpace(id))
+			if id != "" {
+				clientIds = append(clientIds, id)
 			}
-			// remove from cache
-			_ = c.Delete(fmt.Sprintf("%s-%s", xLayout, clientIds[i]))
 		}
+	}
 
+	c, _ := cache.NewCacher(cache.Options{Adapter: "memory"})
+
+	for _, clientId := range clientIds {
+		err := setJsonMaintenance(ctx, s3Client, bucket, xLayout, clientId, payload.IsMaintenance)
+		if err != nil {
+			return server.APIError{Code: http.StatusInternalServerError, Message: fmt.Sprintf("failed to set maintenance for %s: %v", clientId, err)}
+		}
+		// remove from cache so GET /properties serves the new flag
+		_ = c.Delete(fmt.Sprintf("%s-%s", xLayout, clientId))
 	}
 
 	render.JSON(w, r, "ok")
 	return nil
 }
 
-func setJsonMaintenance(ctx context.Context, layout string, id string, isMaintenance bool) error {
-	container := azContainer()
-	blobPath := fmt.Sprintf("%s/%s.json", layout, id)
+func setJsonMaintenance(ctx context.Context, s3Client *s3.Client, bucket string, layout string, id string, isMaintenance bool) error {
+	key := fmt.Sprintf("%s/%s.json", layout, id)
 
-	creds, err := azidentity.NewDefaultAzureCredential(nil)
+	resp, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	})
 	if err != nil {
-		log.Errorf("unable to initialize azure id: %v", err)
-		return errors.Sentinel("failed to auth")
+		log.Errorf("unable to get object %s: %v", key, err)
+		return errors.Wrap(err, "failed to download file")
 	}
+	defer resp.Body.Close()
 
-	client, err := azblob.NewClient(server.AZURE_STORAGE_ACCOUNT, creds, nil)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Errorf("unable to create azure blob client: %v", err)
-		return errors.Sentinel("failed to connect to storage")
-	}
-
-	localFile, err := os.CreateTemp("", "id-*.json")
-	if err != nil {
-		log.Errorf("failed to create temp file: %v", err)
-		return errors.Sentinel("failed to create temporary buffer")
-	}
-	defer localFile.Close()
-
-	_, err = client.DownloadFile(ctx, container, blobPath, localFile, nil)
-
-	if err != nil {
-		log.Errorf("unable to download file: %v", err)
-		return errors.Sentinel("failed to download file")
-	}
-
-	err = updateLocalFile(localFile, isMaintenance)
-	if err != nil {
-		log.Errorf("failed to update fileu: %v", err)
-		return errors.Sentinel("failed to update file")
-	}
-
-	uploadFile, err := os.OpenFile(localFile.Name(), os.O_RDONLY, 0)
-	if err != nil {
-		log.Errorf("failed to open file for upload: %v", err)
-		return errors.Sentinel("failed to open file for upload")
-	}
-	defer uploadFile.Close()
-
-	_, err = client.UploadFile(ctx, container, blobPath, uploadFile, nil)
-	if err != nil {
-		log.Errorf("failed to upload file: %v", err)
-		return errors.Sentinel("failed to upload file")
-	}
-
-	_ = os.Remove(localFile.Name())
-	_ = os.Remove(uploadFile.Name())
-
-	return nil
-}
-
-func updateLocalFile(file *os.File, isMaintenance bool) error {
-
-	data, err := ioutil.ReadFile(file.Name())
-	if err != nil {
-		return errors.Sentinel("failed to read file")
+		log.Errorf("unable to read object %s: %v", key, err)
+		return errors.Wrap(err, "failed to read file")
 	}
 
 	var jsonData map[string]interface{}
-	err = json.Unmarshal(data, &jsonData)
+	err = json.Unmarshal(body, &jsonData)
 	if err != nil {
-		return errors.Sentinel("failed to marshal json")
+		log.Errorf("unable to parse object %s: %v", key, err)
+		return errors.Wrap(err, "failed to parse json")
 	}
 
 	jsonData["isMaintenance"] = isMaintenance
 
 	updatedJson, err := json.MarshalIndent(jsonData, "", "  ")
 	if err != nil {
-		return errors.Sentinel("failed to marshal json")
+		return errors.Wrap(err, "failed to marshal json")
 	}
 
-	err = ioutil.WriteFile(file.Name(), updatedJson, 0644)
+	contentType := "application/json"
+
+	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      &bucket,
+		Key:         &key,
+		Body:        bytes.NewReader(updatedJson),
+		ContentType: &contentType,
+	})
 	if err != nil {
-		return errors.Sentinel("failed to write file")
+		log.Errorf("unable to put object %s: %v", key, err)
+		return errors.Wrap(err, "failed to upload file")
 	}
 
 	return nil
 }
 
-func getClientIds(ctx context.Context, layout string) []string {
+func getClientIds(ctx context.Context, s3Client *s3.Client, bucket string, layout string) ([]string, error) {
 	var result []string
 
-	container := azContainer()
+	prefix := layout + "/"
 
-	creds, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		log.Errorf("unable to initialize azure id: %v", err)
-		return result
-	}
+	paginator := s3.NewListObjectsV2Paginator(s3Client, &s3.ListObjectsV2Input{
+		Bucket: &bucket,
+		Prefix: &prefix,
+	})
 
-	client, err := azblob.NewClient(server.AZURE_STORAGE_ACCOUNT, creds, nil)
-	if err != nil {
-		log.Errorf("unable to create azure blob client: %v", err)
-		return result
-	}
-
-	pager := client.NewListBlobsFlatPager(container, nil)
-
-	for pager.More() {
-		pResp, err := pager.NextPage(ctx)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			log.Errorf("failed to get the list: %v", err)
-			return result
+			return nil, errors.Wrap(err, "failed to list objects")
 		}
 
-		for _, b := range pResp.Segment.BlobItems {
-			if strings.HasPrefix(*b.Name, layout) {
-				fPaths := strings.Split(*b.Name, "/")
-				id := strings.TrimSuffix(fPaths[1], ".json")
-				result = append(result, id)
+		for _, obj := range page.Contents {
+			key := *obj.Key
+			if !strings.HasSuffix(key, ".json") {
+				continue
 			}
+			result = append(result, clientIdFromKey(key, prefix))
 		}
 	}
 
-	return result
+	return result, nil
 }
 
-func azContainer() string {
-	container := "staging"
-	cEnv := os.Getenv("CONTAINER")
-	if cEnv != "" {
-		container = cEnv
-	}
-	return container
+func clientIdFromKey(key string, prefix string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(key, prefix), ".json")
 }

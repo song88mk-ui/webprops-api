@@ -36,7 +36,7 @@ func (s *Server) getConfig(w http.ResponseWriter, r *http.Request) error {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		log.Errorf("unable to load SDK config: %v", err)
-		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to acquire azure id"}
+		return server.APIError{Code: http.StatusInternalServerError, Message: "failed to load AWS config"}
 	}
 
 	s3Client := s3.NewFromConfig(cfg)
