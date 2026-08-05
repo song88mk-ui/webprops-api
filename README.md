@@ -129,6 +129,145 @@ AWS_ACCESS_KEY_ID=<your-key-id>
 AWS_SECRET_ACCESS_KEY=<your-secret>
 ```
 
+## Quick start (concrete example)
+
+Two copy-paste paths from zero to a running service with a real JSON response
+visible in the browser. Option A talks to a real dev bucket through your own AWS
+profile (the normal route). Option B is fully local with LocalStack and needs no
+AWS account.
+
+### Option A: real dev bucket via your AWS profile
+
+Create a `.env` file in the repo root:
+
+```dotenv
+PORT=8000
+# Bucket names follow the song88-{env}-webprops pattern documented above.
+# song88-dev-webprops follows that pattern; the exact dev bucket name is not
+# recorded in this repo, so confirm it with the team before relying on it.
+BUCKET_NAME=song88-dev-webprops
+# LOCAL-ONLY placeholder, not a production secret. Any string works; it only
+# has to match the X-Api-Key header you send to admin endpoints.
+CACHE_API_KEY=local-dev-key
+DEBUG=true
+```
+
+Do not put real AWS keys in `.env`. Credentials come from your own AWS setup via
+the SDK default chain (`config.LoadDefaultConfig`): your `~/.aws` profile
+(optionally select one with `AWS_PROFILE`), SSO session, or role. Make sure the
+profile has `s3:GetObject` on the bucket and that `AWS_REGION` (or the profile
+region) matches the bucket's region.
+
+Run it:
+
+```sh
+go mod download
+go run main.go web
+# log output: api server started on port :8000
+```
+
+Open http://localhost:8000/api/v1/config/G01 in a browser (route:
+`GET /api/v1/config/{clientId}`; `G01` is the example client id used throughout
+this README). You should see that client's config JSON, shaped like the example
+response above. Or from a shell:
+
+```sh
+curl http://localhost:8000/api/v1/config/G01
+```
+
+### Option B: fully local with LocalStack
+
+The service has no custom endpoint handling; it relies entirely on
+`config.LoadDefaultConfig`, and the AWS SDK versions pinned in `go.mod`
+(aws-sdk-go-v2 config v1.32.7) honor the standard `AWS_ENDPOINT_URL_S3` /
+`AWS_ENDPOINT_URL` environment variables (supported by aws-sdk-go-v2 since late
+2023). Note the code never enables S3 path-style addressing
+(`s3.NewFromConfig(cfg)` with no options), so use LocalStack's
+`s3.localhost.localstack.cloud` endpoint, whose bucket subdomains resolve to
+127.0.0.1. MinIO can also work, but only with virtual-host-style bucket
+addressing enabled on the MinIO side (`MINIO_DOMAIN`), since path-style cannot
+be forced from this service.
+
+1. Start LocalStack and seed a minimal properties file (the handlers accept any
+   JSON object; the shape below is the subset of the example response that the
+   `platform-web` consumer reads, plus the `isMaintenance` maintenance flag):
+
+```sh
+docker run --rm -d --name localstack -p 4566:4566 localstack/localstack
+
+cat > G01.json <<'EOF'
+{
+  "ClientCode": "G01",
+  "Features": {
+    "DarkMode": true,
+    "PartialCashout": true
+  },
+  "Layout": {
+    "AL": {
+      "Themes": ["red", "blue"]
+    }
+  },
+  "isMaintenance": false
+}
+EOF
+
+aws --endpoint-url http://localhost:4566 s3 mb s3://song88-dev-webprops
+aws --endpoint-url http://localhost:4566 s3 cp G01.json s3://song88-dev-webprops/G01.json
+# Optional layout-specific copy, used by GET /properties with X-Layout: AL
+aws --endpoint-url http://localhost:4566 s3 cp G01.json s3://song88-dev-webprops/AL/G01.json
+```
+
+2. Create `.env` (the `test`/`test` credentials are LocalStack's conventional
+   dummy values, not real secrets):
+
+```dotenv
+PORT=8000
+BUCKET_NAME=song88-dev-webprops
+CACHE_API_KEY=local-dev-key
+DEBUG=true
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=test
+AWS_SECRET_ACCESS_KEY=test
+AWS_ENDPOINT_URL_S3=http://s3.localhost.localstack.cloud:4566
+```
+
+3. Run and verify:
+
+```sh
+go run main.go web
+# log output: api server started on port :8000
+```
+
+Open http://localhost:8000/api/v1/config/G01 in a browser and you should see
+exactly the JSON you seeded:
+
+```json
+{
+  "ClientCode": "G01",
+  "Features": {
+    "DarkMode": true,
+    "PartialCashout": true
+  },
+  "Layout": {
+    "AL": {
+      "Themes": ["red", "blue"]
+    }
+  },
+  "isMaintenance": false
+}
+```
+
+Shell equivalents:
+
+```sh
+curl http://localhost:8000/api/v1/config/G01
+curl -H "X-Client-Id: G01" -H "X-Layout: AL" http://localhost:8000/api/v1/properties
+```
+
+Remember the 24-hour in-process read cache: if you edit the seeded file in S3
+afterwards, restart the server or call
+`curl -X POST -H "X-Api-Key: local-dev-key" http://localhost:8000/api/v1/cache/flush`.
+
 Running locally
 ---------------
 
