@@ -1,0 +1,8 @@
+# Default owner for everything in the repo
+*                   @FlyingCockatoo/backend
+
+# Anything under the .github directory
+/.github/           @FlyingCockatoo/devops
+
+# Dockerfiles anywhere in the repo
+**/Dockerfile       @FlyingCockatoo/devops
