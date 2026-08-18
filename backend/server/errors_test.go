@@ -26,6 +26,13 @@ func TestAPIError_Error(t *testing.T) {
 			err:  APIError{Code: ErrNotFound, Details: "client xyz"},
 			want: "Not found (code: 404) (client xyz)",
 		},
+		{
+			// Unmapped codes have no entry in errCodeMessages, so the message
+			// renders empty. This documents current behavior, not desired behavior.
+			name: "unmapped code renders an empty message",
+			err:  APIError{Code: 9999},
+			want: " (code: 9999)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -61,6 +68,15 @@ func TestAPIError_prepare(t *testing.T) {
 			err:        APIError{Code: ErrRequestTooBig, Message: "custom"},
 			wantStatus: http.StatusBadRequest,
 			wantMsg:    "custom",
+		},
+		{
+			// Unmapped codes have no entry in errCodeStatuses, so Status is left
+			// at Go's zero value (0) rather than falling back to e.g. 500. This
+			// documents current behavior, not desired behavior.
+			name:       "unmapped code leaves status at zero value",
+			err:        APIError{Code: 9999},
+			wantStatus: 0,
+			wantMsg:    "",
 		},
 	}
 
