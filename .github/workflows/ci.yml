@@ -45,25 +45,28 @@ jobs:
           elif [[ "${{ github.event_name }}" == "release" && "${{ github.event.release.tag_name }}" == *"-prd" ]]; then
             echo "aws_account_id=525375333516" >> $GITHUB_OUTPUT
             echo "aws_region=ap-east-1" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+            echo "aws_account_id=172065883315" >> $GITHUB_OUTPUT
+            echo "aws_region=ap-south-1" >> $GITHUB_OUTPUT
           fi
 
       - name: Docker meta
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         id: meta
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5
         with:
           images: |
             ${{ steps.env.outputs.aws_account_id }}.dkr.ecr.${{ steps.env.outputs.aws_region }}.amazonaws.com/platform-webprops-api
           tags: |
-            type=sha,event=pr,prefix=pr-sha-
-            type=sha,event=branch,prefix={{branch}}-sha-,enable={{is_default_branch}}
+            type=sha,event=branch,suffix=-dev,enable={{is_default_branch}}
             type=semver,pattern={{version}}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
 
       - name: Configure AWS credentials
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8 # v5
         with:
           aws-region: ${{ steps.env.outputs.aws_region }}
@@ -72,11 +75,12 @@ jobs:
           role-session-name: GitHubActions
 
       - name: Login to Amazon ECR
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076 # v2
 
       - name: Build
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
         with:
           push: false
@@ -84,7 +88,7 @@ jobs:
           build-args: VERSION=${{ steps.env.outputs.version }}
 
       - name: Build & Push
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
         with:
           push: true
@@ -93,5 +97,5 @@ jobs:
           build-args: VERSION=${{ steps.env.outputs.version }}
 
       - name: Log out of Amazon ECR
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         run: docker logout ${{ steps.login-ecr.outputs.registry }}
