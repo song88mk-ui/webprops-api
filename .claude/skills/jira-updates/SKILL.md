@@ -23,7 +23,7 @@ Jira is a shared, team-visible system. Every write is immediately visible to the
 
 4. **Content style:** no em dash character ("—") in anything written to Jira or Confluence, use "-" or "," instead; strictly no emojis.
 
-5. Scope: applies to all Atlassian write tools (`editJiraIssue`, `createJiraIssue`, `addCommentToJiraIssue`, `addWorklogToJiraIssue`, `createIssueLink`, `transitionJiraIssue`, and all Confluence write tools).
+5. Scope: applies to all Atlassian write tools (`createJiraIssue`, `editJiraIssue`, `addOrEditJiraIssueComment`, `transitionJiraIssue`, `createConfluenceContent`, `updateConfluenceContent`, and any `executeWrite`/`executeDestructive` operation such as worklogs or issue links).
 
 ## Suggested flow
 

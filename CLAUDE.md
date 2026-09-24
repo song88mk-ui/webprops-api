@@ -6,13 +6,13 @@ For the full endpoint/env/storage/deploy reference, see `.claude/skills/webprops
 
 ## Commands
 
-There is NO Go toolchain installed on this Windows dev machine (checked 2026-07). Options:
+There is NO Go toolchain installed on this Linux dev machine (checked 2026-09-24). Options:
 
 - Build via Docker: `docker build -t webprops .` (multi-stage, distroless runtime)
 - CI builds on every push/PR to main (`.github/workflows/ci.yml`)
 - If Go is available: `go build -o bin/webprops main.go`, run with `go run main.go web`
 
-The binary is a urfave/cli app; the only command is `web` (start the server). There are no tests in this repo and no linter config.
+The binary is a urfave/cli app; the only command is `web` (start the server). The only tests are in `backend/server/errors_test.go` (`go test ./...`; CI runs them on pull requests only). There is no linter config.
 
 Local config comes from a `.env` file (godotenv autoload in `backend/main.go`). Required env: `PORT`, `BUCKET_NAME`, `CACHE_API_KEY`; optional: `DEBUG=true` (request logging), plus standard AWS credential env vars.
 
@@ -24,6 +24,7 @@ Local config comes from a `.env` file (godotenv autoload in `backend/main.go`). 
 - `backend/server/` - shared plumbing: chi router + middleware (`server.go`), `APIError`/`WrapHandler` error rendering (`errors.go`), context middlewares `MustClient` (X-Client-Id), `MaybeLayout` (X-Layout), `MustApiKey` (X-Api-Key)
 - `backend/routes/v1/properties/` - GET config/properties and admin POST config (full-replace update), backed by AWS S3 bucket `BUCKET_NAME` (`song88-{env}-webprops`)
 - `backend/routes/v1/maintenance/` - GET/POST maintenance flags, stored as fields inside the same S3 properties JSON (`{LAYOUT}/{CLIENTID}.json`)
+- `backend/routes/v1/admin/` - cache flush endpoints (`POST /cache/flush`, `DELETE /cache/flush/{clientId}`), gated by `MustApiKey`
 - `backend/log/` - global zap sugared logger, use `log.Infof` etc.
 
 Handler pattern: each route package embeds `*server.Server` in a local `Server` struct, exposes `Mount(srv, router)`, and handlers have signature `func(w, r) error` wrapped with `server.WrapHandler`. Return `server.APIError{Code: ...}` for client-visible errors; any other error becomes a logged 500.
@@ -40,5 +41,5 @@ Handler pattern: each route package embeds `*server.Server` in a local `Server` 
 ## Conventions
 
 - Error text/codes: add new API error codes (4xxx range) to the three maps in `backend/server/errors.go`.
-- Commit messages in this repo use the `[scope] short description` style, lowercase (see git log).
-- Deploys: pushing to main builds an image tagged `main-sha-...` to the dev ECR account. Releases tagged `*-stg` go to staging (account 172065883315, ap-south-1), `*-prd` to production (account 525375333516, ap-east-1). Image repo: `platform-webprops-api`.
+- Commit messages use `[TICKET-ID] Summary` (e.g. `[DEVOPS-295] Remove Confluence reporting from CI`); older commits used a lowercase `[scope]` prefix.
+- Deploys: pushing to main builds an image tagged `sha-<short>-dev` to the dev ECR (account 172065883315, ap-south-1); pull requests build without pushing. Releases tagged `*-stg` go to staging (account 172065883315, ap-south-1), `*-prd` to production (account 525375333516, ap-east-1). Image repo: `platform-webprops-api`.

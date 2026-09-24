@@ -60,7 +60,7 @@ Consequences: cached data survives until TTL, full flush, per-client flush, or a
 
 - No Go toolchain on this dev machine; build with `docker build -t webprops .` or let CI do it.
 - Image: multi-stage, distroless nonroot, entrypoint `/app/bin/webprops`, default cmd `web`.
-- CI (`.github/workflows/ci.yml`): push/PR to main builds and pushes to dev ECR (account 418541840646, ap-south-1) tagged `main-sha-*` (or `pr-sha-*`). GitHub release with tag suffix `-stg` pushes to 172065883315/ap-south-1; `-prd` pushes to 525375333516/ap-east-1. Repo: `platform-webprops-api`. Semver tags also produce version tags.
+- CI (`.github/workflows/ci.yml`): push to main builds and pushes to dev ECR (account 172065883315, ap-south-1) tagged `sha-<short>-dev`; pull requests build without pushing and run `go test ./...`. GitHub release with tag suffix `-stg` pushes to 172065883315/ap-south-1; `-prd` pushes to 525375333516/ap-east-1. Repo: `platform-webprops-api`. Semver tags also produce version tags.
 - Version stamping is broken/no-op: `server.Tag` is a constant "latest", CI passes `VERSION` build-arg but the Dockerfile declares no `ARG VERSION` and no ldflags are used.
 
 ## Known warts (do not silently "fix" without asking)
@@ -69,9 +69,9 @@ Consequences: cached data survives until TTL, full flush, per-client flush, or a
 - `getConfig` does not uppercase the URL clientId, while the header middlewares uppercase theirs; S3 lookups for /config are caller-case-sensitive.
 - Cache admin endpoints return HTTP 200 with `{"status":"nok"}` on auth failure instead of 401/403.
 - AWS config and S3 clients are created per request in every handler (works, relies on the SDK chain being cheap).
-- No tests exist anywhere in the repo.
+- Tests cover only `backend/server/errors.go` (`backend/server/errors_test.go`).
 
 ## Repo conventions
 
-- Commit style: `[scope] lowercase summary` (e.g. `[docker] set cmd`).
+- Commit style: `[TICKET-ID] Summary` (e.g. `[DEVOPS-295] Remove Confluence reporting from CI`); older commits used a lowercase `[scope]` prefix.
 - Logging via `s88/wp/backend/log` package functions (`log.Infof`, `log.Errorf`), never raw zap or fmt.
